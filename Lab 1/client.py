@@ -2,10 +2,9 @@ import socket
 import sys
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
-from PyQt5.QtGui import QFont, QPalette, QColor
+from PyQt5.QtGui import QFont
 import json
 import _thread
-import datetime
 
 
 class ConnectWindow(QMainWindow):
@@ -65,11 +64,21 @@ class ConnectWindow(QMainWindow):
         else:
             address = self.input.text()
         try:
-            self.modal_window = MessageWindow(address=address, nickname=self.name_input.text())
-            self.modal_window.show()
-            self.hide()
+            sock = socket.socket()
+            sock.connect((address, 9000))
+            sock.send(json.dumps({'from': self.name_input.text(), 'message': 'Connection', 'status': 1}).encode('utf-8'))
+            data = json.loads(sock.recv(1024).decode('utf-8'))
+            sock.close()
+            if data['message'] == 'ok':
+                self.modal_window = MessageWindow(address=address, nickname=self.name_input.text())
+                self.modal_window.show()
+                self.hide()
+            else:
+                self.statusBar().showMessage('This nickname is busy')
         except ConnectionRefusedError:
             self.statusBar().showMessage('Server is unavailable')
+        except:
+            self.statusBar().showMessage('Error 500')
 
     def center(self):
         qr = self.frameGeometry()
@@ -85,15 +94,11 @@ class MessageWindow(QMainWindow):
         self._socket = socket.socket()
         self.address = address
         self._socket.connect((self.address, 9000))
-        self._socket.send(self.make_message('Joined', 1).encode('utf-8'))
-        _thread.start_new_thread(listen, (self._socket,))
+        _thread.start_new_thread(self.listen, (self._socket,))
+        self.send_message('Joined', 2)
         self.init_ui()
 
     def init_ui(self):
-        self.quit_btn = QPushButton('Exit', self)
-        self.quit_btn.setGeometry(620, 330, 150, 50)
-        self.quit_btn.clicked.connect(QCoreApplication.instance().quit)
-
         self.input = QTextEdit(self)
         self.input.setGeometry(30, 30, 740, 200)
         self.input.setFont(QFont("Times", 16, QFont.Decorative))
@@ -101,8 +106,16 @@ class MessageWindow(QMainWindow):
         self.enter_btn = QPushButton('Send message', self)
         self.enter_btn.setGeometry(200, 250, 400, 50)
         self.enter_btn.setFont(QFont("Times", 14, QFont.Decorative))
-        self.enter_btn.clicked.connect(self.send_message)
+        self.enter_btn.clicked.connect(self.send_usual_message)
         self.enter_btn.setShortcut('Enter')
+
+        self.quit_btn = QPushButton("User's list", self)
+        self.quit_btn.setGeometry(20, 330, 150, 50)
+        self.quit_btn.clicked.connect(self.list_of_users)
+
+        self.quit_btn = QPushButton('Exit', self)
+        self.quit_btn.setGeometry(620, 330, 150, 50)
+        self.quit_btn.clicked.connect(QCoreApplication.instance().quit)
 
         self.resize(800, 400)
         self.center()
@@ -112,14 +125,20 @@ class MessageWindow(QMainWindow):
     def make_message(self, message, status):
         return json.dumps({'from': self.nickname, 'message': message, 'status': status})
 
-    def send_message(self):
+    def send_usual_message(self):
         message = self.input.toPlainText()
         self.input.clear()
         if message.strip():
-            try:
-                self._socket.send(self.make_message(message, 2).encode('utf-8'))
-            except:
-                self.statusBar().showMessage('Server has gone away')
+            self.send_message(message, 3)
+
+    def send_message(self, message, status):
+        try:
+            self._socket.send(self.make_message(message, status).encode('utf-8'))
+        except ConnectionResetError:
+            self.statusBar().showMessage('Server has gone away')
+
+    def list_of_users(self):
+        self.send_message('Users', 4)
 
     def center(self):
         qr = self.frameGeometry()
@@ -127,14 +146,24 @@ class MessageWindow(QMainWindow):
         qr.moveCenter(cp)
         self.move(qr.topLeft())
 
-
-def listen(sock):
-    while True:
-        data = sock.recv(1024).decode('utf-8')
-        if not data:
-            continue
-        else:
-            print(data)
+    def listen(self, sock):
+        while True:
+            try:
+                data = sock.recv(1024).decode('utf-8')
+                if not data:
+                    continue
+                data = json.loads(data)
+                if data['status'] in [0, 2, 3]:
+                    print(data['message'])
+                elif data['status'] == 4:
+                    print('-' * 22)
+                    print('|', 'Users on channel'.center(20), '|', sep='')
+                    print('-' * 22)
+                    for i, user in enumerate(data['message']):
+                        print('|', f'{i + 1}.{user}'.ljust(20), '|', sep='')
+                    print('-' * 22)
+            except ConnectionResetError:
+                break
 
 
 # name = input('Your nickname >> ')
