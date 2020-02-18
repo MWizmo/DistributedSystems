@@ -77,7 +77,8 @@ class ConnectWindow(QMainWindow):
                 self.statusBar().showMessage('This nickname is busy')
         except ConnectionRefusedError:
             self.statusBar().showMessage('Server is unavailable')
-        except:
+        except Exception as e:
+            print(e)
             self.statusBar().showMessage('Error 500')
 
     def center(self):
@@ -87,58 +88,169 @@ class ConnectWindow(QMainWindow):
         self.move(qr.topLeft())
 
 
-class MessageWindow(QMainWindow):
+class BrowserHandler(QObject):
+    running = False
+    client_func = pyqtSignal(int, str)
+
+    def run(self):
+        while True:
+            try:
+                data = self.sock.recv(1024).decode('utf-8')
+                if not data:
+                    continue
+                data = json.loads(data)
+                if data['status'] in [0, 2, 3]:
+                    print(data['message'])
+                elif data['status'] == 4:
+                    print('-' * 22)
+                    print('|', 'Users on channel'.center(20), '|', sep='')
+                    print('-' * 22)
+                    for i, user in enumerate(data['message']):
+                        print('|', f'{i + 1}. {user}'.ljust(20), '|', sep='')
+                    print('-' * 22)
+                elif data['status'] == 5:
+                    if data['message'].startswith('ok'):
+                        title = '_'.join(data['message'].split('_')[1:-1])
+                        room_id = int(data['message'].split('_')[-1])
+                        self.client_func.emit(room_id, title)
+                    else:
+                        self.client_func.emit(-1, '')
+                elif data['status'] == 6:
+                    if data['message'].startswith('ok'):
+                        title = '_'.join(data['message'].split('_')[1:-1])
+                        room_id = int(data['message'].split('_')[-1])
+                        self.client_func.emit(room_id, title)
+                    else:
+                        self.client_func.emit(-2, '')
+            except ConnectionResetError:
+                break
+
+
+class MessageWindow(QWidget):
     def __init__(self, address, nickname):
         super().__init__()
         self.nickname = nickname
         self._socket = socket.socket()
         self.address = address
         self._socket.connect((self.address, 9000))
-        _thread.start_new_thread(self.listen, (self._socket,))
+        self.thread = QThread()
+        self.browserHandler = BrowserHandler()
+        self.browserHandler.sock = self._socket
+        self.browserHandler.moveToThread(self.thread)
+        self.browserHandler.client_func.connect(self.add_room)
+        self.thread.started.connect(self.browserHandler.run)
+        self.thread.start()
         self.send_message('Joined', 2)
         self.init_ui()
 
+    @pyqtSlot(int, str)
+    def add_room(self, room_id, title):
+        if room_id > -1:
+            grid = QGridLayout()
+            grid.setSpacing(10)
+            input = QTextEdit(self)
+            input.setFont(QFont("Times", 16, QFont.Decorative))
+
+            enter_btn = QPushButton('Send message', self)
+            enter_btn.setFont(QFont("Times", 14, QFont.Decorative))
+            enter_btn.clicked.connect(lambda i: self.send_usual_message(input, room_id))
+            enter_btn.setShortcut('Enter')
+
+            user_btn = QPushButton("User's list", self)
+            user_btn.clicked.connect(lambda i: self.list_of_users(room_id))
+            # user_btn.clicked.connect(self.list_of_users)
+
+            # quit_btn = QPushButton('Leave room', self)
+
+            grid.addWidget(input, 1, 0, 2, 4)
+            grid.addWidget(enter_btn, 3, 1, 1, 2)
+            grid.addWidget(user_btn, 4, 0)
+            #grid.addWidget(quit_btn, 4, 3)
+
+            new_chat = QWidget(self.tabs)
+            new_chat.setLayout(grid)
+            self.tabs.addTab(new_chat, f'Room - {title}')
+        elif room_id == -1:
+            QMessageBox.warning(
+                self, "Warning", "This title is busy")
+        else:
+            QMessageBox.warning(
+                self, "Warning", "This room doesn't exist")
+
     def init_ui(self):
         self.input = QTextEdit(self)
-        self.input.setGeometry(30, 30, 740, 200)
         self.input.setFont(QFont("Times", 16, QFont.Decorative))
 
         self.enter_btn = QPushButton('Send message', self)
-        self.enter_btn.setGeometry(200, 250, 400, 50)
         self.enter_btn.setFont(QFont("Times", 14, QFont.Decorative))
-        self.enter_btn.clicked.connect(self.send_usual_message)
+        self.enter_btn.clicked.connect(lambda i: self.send_usual_message(self.input))
         self.enter_btn.setShortcut('Enter')
 
-        self.quit_btn = QPushButton("User's list", self)
-        self.quit_btn.setGeometry(20, 330, 150, 50)
-        self.quit_btn.clicked.connect(self.list_of_users)
+        self.user_btn = QPushButton("User's list", self)
+        self.user_btn.clicked.connect(self.list_of_users)
 
         self.quit_btn = QPushButton('Exit', self)
-        self.quit_btn.setGeometry(620, 330, 150, 50)
         self.quit_btn.clicked.connect(QCoreApplication.instance().quit)
 
-        self.resize(800, 400)
+        self.add_room_btn = QPushButton('Create room', self)
+        self.add_room_btn.clicked.connect(self.create_room)
+
+        self.join_room_btn = QPushButton('Join room', self)
+        self.join_room_btn.clicked.connect(self.join_room)
+
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        grid.addWidget(self.input, 1, 0, 2, 4)
+        grid.addWidget(self.enter_btn, 3, 1, 1, 2)
+        grid.addWidget(self.user_btn, 4, 0)
+        grid.addWidget(self.join_room_btn, 4, 1)
+        grid.addWidget(self.add_room_btn, 4, 2)
+        grid.addWidget(self.quit_btn, 4, 3)
+
+        self.tabs = QTabWidget()
+        self.common_chat = QWidget()
+        self.tabs.addTab(self.common_chat, 'Common')
+        self.common_chat.setLayout(grid)
+
+        self.resize(800, 600)
+        grid = QGridLayout()
+        grid.addWidget(self.tabs, 1, 0, 4, 3)
+        self.setLayout(grid)
         self.center()
         self.setWindowTitle(f'Chat - {self.nickname}')
         self.show()
 
-    def make_message(self, message, status):
-        return json.dumps({'from': self.nickname, 'message': message, 'status': status})
+    def make_message(self, message, status, room_id):
+        return json.dumps({'from': self.nickname, 'message': message, 'status': status, 'room': room_id})
 
-    def send_usual_message(self):
-        message = self.input.toPlainText()
-        self.input.clear()
+    def send_usual_message(self, input, room=0):
+        message = input.toPlainText()
+        input.clear()
         if message.strip():
-            self.send_message(message, 3)
+            self.send_message(message, 3, room)
 
-    def send_message(self, message, status):
+    def send_message(self, message, status, room=0):
         try:
-            self._socket.send(self.make_message(message, status).encode('utf-8'))
+            self._socket.send(self.make_message(message, status, room).encode('utf-8'))
         except ConnectionResetError:
             self.statusBar().showMessage('Server has gone away')
 
-    def list_of_users(self):
-        self.send_message('Users', 4)
+    def list_of_users(self, room_id=0):
+        self.send_message(f'Users', 4, room_id)
+
+    def create_room(self):
+        text, ok = QInputDialog.getText(self, 'Creating new room',
+                                        'Enter room title:')
+        if ok:
+        #     num, ok = QInputDialog.getInt(self, "Room's members number", 'Enter max number of members')
+        #     if ok:
+                self.send_message(f'New room_{text}_{0}', 5)
+
+    def join_room(self):
+        text, ok = QInputDialog.getText(self, 'Joining room',
+                                        'Enter room title:')
+        if ok:
+            self.send_message(f'New room_{text}', 6)
 
     def center(self):
         qr = self.frameGeometry()
@@ -160,31 +272,41 @@ class MessageWindow(QMainWindow):
                     print('|', 'Users on channel'.center(20), '|', sep='')
                     print('-' * 22)
                     for i, user in enumerate(data['message']):
-                        print('|', f'{i + 1}.{user}'.ljust(20), '|', sep='')
+                        print('|', f'{i + 1}. {user}'.ljust(20), '|', sep='')
                     print('-' * 22)
+                elif data['status'] == 5 and data['message'].startswith('ok'):
+                    title = '_'.join(data['message'].split('_')[1:-1])
+                    room_id = data['message'].split('_')[-1]
+
+                    grid = QGridLayout()
+                    grid.setSpacing(10)
+                    input = QTextEdit(self)
+                    input.setFont(QFont("Times", 16, QFont.Decorative))
+
+                    enter_btn = QPushButton('Send message', self)
+                    enter_btn.setFont(QFont("Times", 14, QFont.Decorative))
+                    enter_btn.clicked.connect(lambda i: self.send_usual_message(input))
+                    enter_btn.setShortcut('Enter')
+
+                    user_btn = QPushButton("User's list", self)
+                    user_btn.clicked.connect(lambda i: self.list_of_users(room_id))
+                    #user_btn.clicked.connect(self.list_of_users)
+
+                    quit_btn = QPushButton('Leave room', self)
+
+                    grid.addWidget(input, 1, 0, 2, 4)
+                    grid.addWidget(enter_btn, 3, 1, 1, 2)
+                    grid.addWidget(user_btn, 4, 0)
+                    grid.addWidget(quit_btn, 4, 3)
+
+                    new_chat = QWidget(self.tabs)
+                    new_chat.setLayout(grid)
+                    self.tabs.addTab(new_chat, f'Room - {title}')
+
             except ConnectionResetError:
                 break
 
 
-# name = input('Your nickname >> ')
-# sock = socket.socket()
-# try:
-#     sock.connect(('127.0.0.2', 9000))
-#     _thread.start_new_thread(listen, (sock,))
-#     sock.send(make_message(name, '').encode('utf-8'))
-#     while True:
-#         try:
-#             print("Enter your message")
-#             mess = input()
-#             sock.send(make_message(name, mess).encode('utf-8'))
-#             # print(sock.recv(1024).decode('utf-8'))
-#         except ConnectionResetError:
-#             print("Server has gone away")
-#             break
-# except ConnectionRefusedError:
-#     print("Server is unavailable. Please, try later")
-# sock.connect(('18.217.88.63', 9000))
-# sock.connect(('localhost', 9000))
 app = QApplication(sys.argv)
 connector = ConnectWindow()
 sys.exit(app.exec_())
