@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import QFont
 import json
-import _thread
+import os
 
 
 class ConnectWindow(QMainWindow):
@@ -98,8 +98,11 @@ class BrowserHandler(QObject):
                 data = self.sock.recv(1024).decode('utf-8')
                 if not data:
                     continue
-                data = json.loads(data)
-                if data['status'] in [0, 2, 3]:
+                try:
+                    data = json.loads(data)
+                except:
+                    continue
+                if data['status'] in [0, 2, 3, 7]:
                     print(data['message'])
                 elif data['status'] == 4:
                     print('-' * 22)
@@ -122,8 +125,40 @@ class BrowserHandler(QObject):
                         self.client_func.emit(room_id, title)
                     else:
                         self.client_func.emit(-2, '')
+                elif data['status'] == 8:
+                    filename = data['message']
+                    with self.sock.makefile('rb') as file:
+                        while True:
+                            raw = file.readline()
+                            if not raw:
+                                break
+                            filename = raw.strip().decode()
+                            length = int(file.readline())
+                            path = os.path.join('uploads', filename)
+                            with open(path, 'wb') as f:
+                                while length:
+                                    data = file.read(min(length, 100000))
+                                    if not data:
+                                        break
+                                    f.write(data)
+                                    length -= len(data)
+                            print(f'-- File was uploaded to uploads/{filename} --')
+                            break
+                elif data['status'] == 80:
+                    print("There is no this file in room!")
+                elif data['status'] == 9:
+                    if data['message']:
+                        files = data['message'].split('|')
+                        print(f"Files in room '{data['room']}':")
+                        for i, file in enumerate(files):
+                            print(f'{i+1}. {file}')
+                    else:
+                        print(f'Room "{data["room"]}" has empty list of files')
             except ConnectionResetError:
                 break
+            except Exception as e:
+                print(e)
+                continue
 
 
 class MessageWindow(QWidget):
@@ -136,6 +171,7 @@ class MessageWindow(QWidget):
         self.thread = QThread()
         self.browserHandler = BrowserHandler()
         self.browserHandler.sock = self._socket
+        self.browserHandler.mainWindow = self
         self.browserHandler.moveToThread(self.thread)
         self.browserHandler.client_func.connect(self.add_room)
         self.thread.started.connect(self.browserHandler.run)
@@ -158,13 +194,22 @@ class MessageWindow(QWidget):
 
             user_btn = QPushButton("User's list", self)
             user_btn.clicked.connect(lambda i: self.list_of_users(room_id))
-            # user_btn.clicked.connect(self.list_of_users)
 
-            # quit_btn = QPushButton('Leave room', self)
+            send_file_btn = QPushButton('Send file', self)
+            send_file_btn.clicked.connect(lambda i: self.send_file(room_id))
+
+            look_files_btn = QPushButton('List of files', self)
+            look_files_btn.clicked.connect(lambda i: self.look_files(room_id))
+
+            upload_file_btn = QPushButton('Upload file', self)
+            upload_file_btn.clicked.connect(lambda i: self.upload_file(room_id))
 
             grid.addWidget(input, 1, 0, 2, 4)
             grid.addWidget(enter_btn, 3, 1, 1, 2)
             grid.addWidget(user_btn, 4, 0)
+            grid.addWidget(send_file_btn, 4, 1)
+            grid.addWidget(look_files_btn, 4, 2)
+            grid.addWidget(upload_file_btn, 4, 3)
             #grid.addWidget(quit_btn, 4, 3)
 
             new_chat = QWidget(self.tabs)
@@ -220,6 +265,26 @@ class MessageWindow(QWidget):
         self.setWindowTitle(f'Chat - {self.nickname}')
         self.show()
 
+    def upload_file(self, room):
+        text, ok = QInputDialog.getText(self, 'Uploading of file',
+                                        'Enter title of file from your room:')
+        if ok:
+            self.send_message(text, 8, room)
+
+    def send_file(self, room):
+        fname = QFileDialog.getOpenFileName(self, 'Open file', '/')[0]
+        if fname:
+            filesize = os.path.getsize(fname)
+            self.send_message(fname.split('/')[-1], 7, room)
+            self._socket.sendall(fname.split('/')[-1].encode() + b'\n')
+            self._socket.sendall(str(filesize).encode() + b'\n')
+            with open(fname, 'rb') as f:
+                while True:
+                    data = f.read(100000)
+                    if not data:
+                        break
+                    self._socket.sendall(data)
+
     def make_message(self, message, status, room_id):
         return json.dumps({'from': self.nickname, 'message': message, 'status': status, 'room': room_id})
 
@@ -238,13 +303,14 @@ class MessageWindow(QWidget):
     def list_of_users(self, room_id=0):
         self.send_message(f'Users', 4, room_id)
 
+    def look_files(self, room_id):
+        self.send_message(f'Files', 9, room_id)
+
     def create_room(self):
         text, ok = QInputDialog.getText(self, 'Creating new room',
                                         'Enter room title:')
         if ok:
-        #     num, ok = QInputDialog.getInt(self, "Room's members number", 'Enter max number of members')
-        #     if ok:
-                self.send_message(f'New room_{text}_{0}', 5)
+            self.send_message(f'New room_{text}_{0}', 5)
 
     def join_room(self):
         text, ok = QInputDialog.getText(self, 'Joining room',

@@ -2,6 +2,8 @@ import socket
 import _thread
 import json
 import datetime
+import os
+import time
 
 
 class Room:
@@ -22,6 +24,8 @@ class Server:
     def __init__(self):
         self.connections = list()
         self.rooms = list()
+        for file in os.listdir('files'):
+            os.remove(os.path.join('files', file))
 
     def make_message(self, message, status, room):
         return json.dumps({'message': message, 'status': status, 'room': room})
@@ -87,7 +91,49 @@ class Server:
                             break
                     else:
                         connection.send(self.make_message(f'no', 6, 0).encode('utf-8'))
-            except ConnectionResetError:
+                elif data['status'] == 7:
+                    filename = data['message']
+                    with connection.makefile('rb') as file:
+                        while True:
+                            raw = file.readline()
+                            if not raw:
+                                break
+                            filename = f'room{data["room"]}_{raw.strip().decode()}'
+                            length = int(file.readline())
+                            path = os.path.join('files', filename)
+                            with open(path, 'wb') as f:
+                                while length:
+                                    data = file.read(min(length, 100000))
+                                    if not data:
+                                        break
+                                    f.write(data)
+                                    length -= len(data)
+                            print(f'-- File was uploaded to files/{filename} --')
+                            connection.send(self.make_message(f'File was uploaded', 7, 0).encode('utf-8'))
+                            break
+                    _thread.start_new_thread(delete_file, (os.path.join('files', filename), 60))
+                elif data['status'] == 8:
+                    file = f'room{data["room"]}_{data["message"]}'
+                    if file in os.listdir('files'):
+                        fname = os.path.join('files', file)
+                        filesize = os.path.getsize(fname)
+                        connection.send(self.make_message(data["message"], 8, 0).encode('utf-8'))
+                        connection.sendall(fname.split('\\')[-1].encode() + b'\n')
+                        connection.sendall(str(filesize).encode() + b'\n')
+                        with open(fname, 'rb') as f:
+                            while True:
+                                data = f.read(100000)
+                                if not data:
+                                    break
+                                connection.sendall(data)
+                    else:
+                        connection.send(self.make_message('no', 80, 0).encode('utf-8'))
+                elif data['status'] == 9:
+                    all_files = os.listdir('files')
+                    files = [file.split('_')[1] for file in all_files if file.startswith(f'room{data["room"]}')]
+                    room_title = self.rooms[data['room'] - 1].title
+                    connection.send(self.make_message('|'.join(files), 9, room_title).encode('utf-8'))
+            except (ConnectionResetError, ConnectionAbortedError):
                 message = ''
                 i = 0
                 now = datetime.datetime.now()
@@ -100,9 +146,13 @@ class Server:
                 self.send_message(message, 0, 0)
                 connection.close()
                 break
-            except:
-                pass
+            # except Exception as e:
+            #     print(e)
 
+
+def delete_file(path, delay=100):
+    time.sleep(delay)
+    os.remove(path)
 
 sock = socket.socket()
 sock.bind(('', 9000))
