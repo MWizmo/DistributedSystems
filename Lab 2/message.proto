@@ -1,0 +1,21 @@
+syntax = "proto2";
+
+package susu;
+
+message Message {
+  optional string str_field = 1;
+  repeated list_record list_field = 2;
+  repeated dict_record dict_field = 3;
+  optional int32 int_field = 4;
+  optional float float_field = 5;
+
+  message list_record{
+  	required int32 value = 1;
+  }
+
+  message dict_record {
+    required string key = 1;
+    required string value = 2;
+  }
+
+}

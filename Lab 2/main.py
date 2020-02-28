@@ -8,6 +8,7 @@ import dicttoxml
 from io import BytesIO
 import fastavro
 import msgpack
+import message_pb2
 
 
 message = {
@@ -90,6 +91,40 @@ def avro_test():
     print("Avro")
 
 
+def protobuff_test():
+    m = message_pb2.Message()
+    m.str_field = message['words']
+    for item in message['list']:
+        record = m.list_field.add()
+        record.value = item
+    for item in message['dict'].keys():
+        record = m.dict_field.add()
+        record.key = item
+        record.value = message['dict'][item]
+    m.int_field = message['int']
+    m.float_field = message['float']
+    src = m.SerializeToString()
+    setup = '''import message_pb2
+d=%s 
+m = message_pb2.Message()
+m.str_field = d['words']
+for item in d['list']:
+    record = m.list_field.add()
+    record.value = item
+for item in d['dict'].keys():
+    record = m.dict_field.add()
+    record.key = item
+    record.value = d['dict'][item]
+m.int_field = d['int']
+m.float_field = d['float']
+src = m.SerializeToString()''' % message
+    result = timeit(setup=setup, stmt='m.SerializeToString()', number=loops)
+    enc_table.append(['ProtoBuff serialization', result, sys.getsizeof(src)])
+    result = timeit(setup=setup, stmt='new_mess = message_pb2.Message();new_mess.ParseFromString(src)', number=loops)
+    dec_table.append(['ProtoBuff deserialization', result])
+    print("ProtoBuff")
+
+
 def yaml_test():
     src = yaml.dump(message)
     setup = 'd=%s; import yaml; src=yaml.dump(d)' % message
@@ -114,6 +149,7 @@ native_test()
 json_test()
 xml_test()
 avro_test()
+protobuff_test()
 yaml_test()
 msgpack_test()
 
