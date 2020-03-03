@@ -1,0 +1,9 @@
+syntax = 'proto3';
+
+message Message{
+    string text     = 1 ;
+}
+
+service Reverse{
+    rpc reverse(Message) returns (Message){}
+}
